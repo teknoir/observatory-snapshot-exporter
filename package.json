@@ -1,0 +1,41 @@
+{
+  "name": "snapshot-exporter",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "NODE_ENV=production node dist/index.js",
+    "dev": "NODE_ENV=development LOG_LEVEL=debug nodemon --watch src --ext ts --exec ts-node src/index.ts",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/teknoir/snapshot-exporter.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/teknoir/snapshot-exporter/issues"
+  },
+  "homepage": "https://github.com/teknoir/snapshot-exporter#readme",
+  "dependencies": {
+    "@google-cloud/storage": "^7.16.0",
+    "dotenv": "^16.3.1",
+    "mqtt": "^5.1.0",
+    "redis": "4.6.14",
+    "sharp": "^0.34.2",
+    "winston": "^3.17.0",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "@types/mqtt": "^0.0.34",
+    "@types/node": "^24.0.3",
+    "@types/redis": "^4.0.10",
+    "@types/winston": "^2.4.4",
+    "@types/ws": "^8.18.1",
+    "nodemon": "^3.1.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
