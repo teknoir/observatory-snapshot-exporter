@@ -10,6 +10,7 @@ import ConverterQueue from './services/converter-queue';
 // Read environment variables into constants
 const googleCloudProject = process.env.GOOGLE_CLOUD_PROJECT || 'teknoir';
 const gcloudStorageBucket = process.env.GCLOUD_STORAGE_BUCKET || 'victra-poc.teknoir.cloud';
+const schedulerInterval = parseInt(process.env.SCHEDULER_INTERVAL || '10000', 10);
 
 logger.info(`Starting Snapshot Exporter`);
 logger.info(`Google Cloud Project: ${googleCloudProject}`);
@@ -73,7 +74,7 @@ const main = async (): Promise<void> => {
     }
   };
 
-  const scheduler = new Scheduler(10000, sendCachedVideoTask); // Run every 5 seconds
+  const scheduler = new Scheduler(schedulerInterval, sendCachedVideoTask); // Run every 5 seconds
 
   scheduler.start();
 };

@@ -23,7 +23,7 @@ function deploy_to_gke() {
     kubectl get profiles.kubeflow.org ${APP_NAMESPACE} -n ${CONTROLLER_NAMESPACE} -o yaml > ${TEMP_FILE}
 
     # Update profile image tag
-    IMAGE_TAG="${BRANCH_NAME//\//_}-${SHORT_SHA}" yq -i '(.spec.plugins[] | select(.kind=="SDMC").spec.snapshot-exporter_version) |= strenv(IMAGE_TAG)' ${TEMP_FILE}
+    IMAGE_TAG="${BRANCH_NAME//\//_}-${SHORT_SHA}" yq -i '(.spec.plugins[] | select(.kind=="SDMC").spec.snapshot_exporter_version) |= strenv(IMAGE_TAG)' ${TEMP_FILE}
     echo -e ">>> Deployment will be updated with the following params: \n`yq '(.spec.plugins[] | select(.kind=="SDMC"))' ${TEMP_FILE}`"
 
     # Apply profile again
