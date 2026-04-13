@@ -1,6 +1,4 @@
-ARG NODE_VERSION
-
-FROM node:${NODE_VERSION}-slim
+FROM node:22-slim
 
 WORKDIR /usr/src/app
 
