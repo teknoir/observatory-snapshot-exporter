@@ -1,4 +1,5 @@
 import logger from './logger';
+import { errorInfo } from '../utils/utils';
 
 class Scheduler {
   private interval: number;
@@ -30,7 +31,7 @@ class Scheduler {
       try {
         await this.task();
       } catch (error) {
-        logger.error('Error occurred while running the scheduled task', { error });
+        logger.error('Error occurred while running the scheduled task', { error: errorInfo(error) });
       } finally {
         this.isRunning = false;
       }
