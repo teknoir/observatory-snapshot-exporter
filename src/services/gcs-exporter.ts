@@ -1,87 +1,85 @@
 import { Storage } from '@google-cloud/storage';
-import { Readable } from 'stream';
 import logger from './logger';
 import { ImageBatchItem } from '../utils/types';
+import { errorInfo } from '../utils/utils';
+
+export interface BucketLike {
+  file(name: string): {
+    save(data: Buffer, options: { contentType?: string; resumable?: boolean }): Promise<unknown>;
+  };
+}
+
+export interface GCSExporterOptions {
+  concurrency?: number;
+  bucket?: BucketLike;
+}
+
+export interface BatchUploadResult {
+  uploaded: number;
+  failed: number;
+}
+
+const DEFAULT_CONCURRENCY = 4;
 
 class GCSExporter {
-  private storage: Storage;
-  private bucketName: string;
+  private bucket: BucketLike;
+  private concurrency: number;
 
-  constructor(projectId: string, bucketName: string) {
-    this.storage = new Storage({ projectId });
-    this.bucketName = bucketName;
+  constructor(projectId: string, bucketName: string, options: GCSExporterOptions = {}) {
+    this.concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
+    this.bucket = options.bucket ?? new Storage({ projectId }).bucket(bucketName);
   }
 
   /**
-   * Upload a single image to GCS.
-   * @param fileName - Name of the file in GCS.
-   * @param base64Image - Base64-encoded JPEG image string.
+   * Upload images to GCS with a bounded number of concurrent saves. Waits for
+   * every upload to settle and never rejects.
+   * @param images - Array of objects containing fileName and buffer.
    */
-  async uploadImage(fileName: string, base64Image: string): Promise<void> {
-    try {
-      const buffer = Buffer.from(base64Image, 'base64');
-      const bucket = this.storage.bucket(this.bucketName);
-      const file = bucket.file(fileName);
+  async batchUploadImages(images: ImageBatchItem[]): Promise<BatchUploadResult> {
+    const items = images.filter(image => !!image.buffer);
 
-      await file.save(buffer, {
-        contentType: 'image/jpeg',
-        resumable: true,
-      });
+    let uploaded = 0;
+    let failed = 0;
+    let firstError: unknown = null;
+    let nextIndex = 0;
 
-      logger.debug(`Image uploaded successfully: ${fileName}`);
-    } catch (error) {
-      logger.error('Error uploading image to GCS', { error });
-      throw error;
-    }
-  }
+    const worker = async (): Promise<void> => {
+      while (nextIndex < items.length) {
+        const item = items[nextIndex];
+        nextIndex += 1;
 
-  /**
-   * Batch upload images to GCS using streams.
-   * @param images - Array of objects containing fileName and base64Image.
-   */
-  async batchUploadImages(images: ImageBatchItem[]): Promise<void> {
-    const maxBatchSize = 5000; // GCS rate limit: 5000 writes per second
-    const bucket = this.storage.bucket(this.bucketName);
-
-    for (let i = 0; i < images.length; i += maxBatchSize) {
-      const batch = images.slice(i, i + maxBatchSize).filter(image => !!image.buffer); // Filter out empty images
-
-      const stream = new Readable({
-        objectMode: true,
-        read() {
-          batch.forEach(image => this.push(image));
-          this.push(null); // Signal end of stream
-        },
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        stream
-          .on('data', async (image: ImageBatchItem) => {
-            // const buffer = Buffer.from(image.base64Image, 'base64');
-            const buffer = image.buffer; // Use the buffer directly if provided
-            const file = bucket.file(image.fileName);
-
-            try {
-              await file.save(buffer, {
-                contentType: 'image/jpeg',
-                resumable: true,
-              });
-              logger.debug(`Image uploaded successfully: ${image.fileName}`);
-            } catch (error) {
-              logger.error('Error uploading image in batch', { error });
-              reject(error);
-            }
-          })
-          .on('end', () => {
-            logger.debug('Batch upload completed');
-            resolve();
-          })
-          .on('error', error => {
-            logger.error('Error in batch upload stream', { error });
-            reject(error);
+        try {
+          await this.bucket.file(item.fileName).save(item.buffer, {
+            contentType: 'image/jpeg',
+            resumable: false, // Recommended for small files.
           });
+          uploaded += 1;
+          logger.debug(`Image uploaded successfully: ${item.fileName}`);
+        } catch (error) {
+          failed += 1;
+          if (firstError === null) {
+            firstError = error;
+          }
+        }
+      }
+    };
+
+    const workers: Promise<void>[] = [];
+    const workerCount = Math.min(this.concurrency, items.length);
+    for (let i = 0; i < workerCount; i += 1) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+
+    if (failed > 0) {
+      logger.error(`Failed to upload ${failed} of ${items.length} images to GCS`, {
+        uploaded,
+        failed,
+        error: errorInfo(firstError),
       });
     }
+
+    return { uploaded, failed };
   }
 }
 

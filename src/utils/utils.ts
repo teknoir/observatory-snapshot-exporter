@@ -1,3 +1,26 @@
+// Turn an unknown thrown value into the plain fields a logger can serialise.
+export const errorInfo = (
+  error: unknown
+): { message: string; name?: string; code?: string | number } => {
+  if (typeof error === 'object' && error !== null) {
+    const candidate = error as { message?: unknown; name?: unknown; code?: unknown };
+    const info: { message: string; name?: string; code?: string | number } = {
+      message: typeof candidate.message === 'string' ? candidate.message : String(error),
+    };
+
+    if (typeof candidate.name === 'string') {
+      info.name = candidate.name;
+    }
+    if (typeof candidate.code === 'string' || typeof candidate.code === 'number') {
+      info.code = candidate.code;
+    }
+
+    return info;
+  }
+
+  return { message: String(error) };
+};
+
 // Generate a unique ID
 export const getUniqueID = (): string => {
   const s4 = (): string => {

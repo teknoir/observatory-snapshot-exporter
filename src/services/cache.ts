@@ -1,5 +1,6 @@
 import { createClient, RedisClientType } from 'redis';
 import logger from './logger';
+import { errorInfo } from '../utils/utils';
 
 class CacheService {
   private client: RedisClientType | null = null;
@@ -13,7 +14,7 @@ class CacheService {
 
     this.client
       .on('error', (err: Error) => {
-        logger.error('Redis Client Error', { err });
+        logger.error('Redis Client Error', { error: errorInfo(err) });
         this.inited = false;
       })
       .on('ready', () => {
@@ -39,12 +40,17 @@ class CacheService {
     return await this.client.hLen(set);
   }
 
+  /**
+   * Visit every entry of a hash.
+   * @returns false when the client is not ready and nothing was scanned, true
+   * after a complete scan.
+   */
   async forEachEntry<T>(
     set: string,
     cb: (field: string, value: T) => void
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!this.inited || !this.client) {
-      return;
+      return false;
     }
 
     let cursor = 0;
@@ -55,6 +61,8 @@ class CacheService {
         cb(field, JSON.parse(value));
       }
     } while (cursor !== 0);
+
+    return true;
   }
 }
 

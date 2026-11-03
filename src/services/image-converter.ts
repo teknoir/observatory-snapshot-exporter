@@ -1,36 +1,25 @@
-import { Worker } from 'worker_threads';
-import logger from './logger';
+import sharp from 'sharp';
 import { ImageBatchItem } from '../utils/types';
-import path from 'path';
 
+// libvips keeps an operation cache by default; a long-running service does not
+// benefit from it and it only holds memory.
+sharp.cache(false);
 
-// Main thread logic
+// Main thread logic. sharp runs libvips on its own thread pool, so the event
+// loop is not blocked by the conversion.
 class ImageConverter {
   async convert(imageBatchItem: ImageBatchItem): Promise<ImageBatchItem> {
-    return new Promise((resolve, reject) => {
-      const worker = new Worker(path.join(__dirname, '../workers/image-converter-worker.js'), {
-        workerData: { imageBatchItem },
-      });
+    const buffer = imageBatchItem.buffer; // Use the buffer directly
 
-      worker.on('message', (result: ImageBatchItem | { error: any }) => {
-        if ('error' in result) {
-          reject(result.error);
-        } else {
-          resolve(result);
-        }
-      });
+    const lowQualityBuffer = await sharp(buffer)
+      .resize(320, 180) // Resize to low resolution (e.g., 320x180)
+      .jpeg({ quality: 50 }) // Reduce quality to 50%
+      .toBuffer();
 
-      worker.on('error', error => {
-        logger.error('Worker error', { error });
-        reject(error);
-      });
-
-      worker.on('exit', code => {
-        if (code !== 0) {
-          reject(new Error(`Worker stopped with exit code ${code}`));
-        }
-      });
-    });
+    return {
+      fileName: imageBatchItem.fileName.replace('frames-hq', 'frames-lq'), // Update file path for low-quality image
+      buffer: lowQualityBuffer, // Use the buffer directly
+    };
   }
 }
 

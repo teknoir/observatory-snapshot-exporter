@@ -1,86 +1,128 @@
 import 'dotenv/config';
-import fs from 'fs';
 import logger from './services/logger';
 import CacheService from './services/cache';
 import Scheduler from './services/scheduller';
-import { ImageBatchItem, InferenceEvent } from './utils/types';
+import { ImageBatchItem } from './utils/types';
 import GCSExporter from './services/gcs-exporter';
 import ConverterQueue from './services/converter-queue';
+import { FrameTracker } from './services/frame-tracker';
+import { createExportTask } from './services/export-task';
 
 // Read environment variables into constants
 const googleCloudProject = process.env.GOOGLE_CLOUD_PROJECT || 'teknoir';
 const gcloudStorageBucket = process.env.GCLOUD_STORAGE_BUCKET || 'victra-poc.teknoir.cloud';
 const schedulerInterval = parseInt(process.env.SCHEDULER_INTERVAL || '10000', 10);
+const memoryLogInterval = parseInt(process.env.MEMORY_LOG_INTERVAL || '600000', 10);
 
 logger.info(`Starting Snapshot Exporter`);
 logger.info(`Google Cloud Project: ${googleCloudProject}`);
 logger.info(`GCloud Storage Bucket: ${gcloudStorageBucket}`);
 
+let scheduler: Scheduler | null = null;
+let converterQueue: ConverterQueue | null = null;
+let currentRun: Promise<void> | null = null;
+let shuttingDown = false;
+
+const toMB = (bytes: number): number => Math.round(bytes / 1024 / 1024);
+
+const startMemoryLog = (queue: ConverterQueue, tracker: FrameTracker): void => {
+  if (!Number.isFinite(memoryLogInterval) || memoryLogInterval <= 0) {
+    return;
+  }
+
+  const timer = setInterval(() => {
+    const usage = process.memoryUsage();
+
+    logger.info('memory', {
+      rssMB: toMB(usage.rss),
+      heapUsedMB: toMB(usage.heapUsed),
+      externalMB: toMB(usage.external),
+      arrayBuffersMB: toMB(usage.arrayBuffers),
+      queue: queue.stats(),
+      trackedFrames: tracker.size(),
+    });
+  }, memoryLogInterval);
+
+  timer.unref();
+};
 
 const main = async (): Promise<void> => {
   const cacheService = new CacheService();
   await cacheService.init();
 
   const gcsExporter = new GCSExporter(googleCloudProject, gcloudStorageBucket);
-  const converterQueue = new ConverterQueue(3000, 2000, async (batch: ImageBatchItem[]) => {
+  const queue = new ConverterQueue(3000, 2000, async (batch: ImageBatchItem[]) => {
     logger.info(`Processing batch of Low Quality ${batch.length} images`);
     await gcsExporter.batchUploadImages(batch);
   });
+  const tracker = new FrameTracker();
 
-  const frameToBatchItem = (frame: InferenceEvent): ImageBatchItem | null => {
-    const timestamp = (frame.metadata?.timestamp || new Date().toISOString()).replace(/[:]/g, '-');
+  converterQueue = queue;
+  startMemoryLog(queue, tracker);
 
-    const imageBase64 = (frame.data?.image || '').replace(/^data:image\/[a-z]+;base64,/, '');
+  const exportTask = createExportTask({
+    cache: cacheService,
+    exporter: gcsExporter,
+    queue,
+    tracker,
+  });
 
-    if (!imageBase64) {
-      return null;
-    }
-
-    const imageBuffer = Buffer.from(imageBase64, 'base64');
-
-    return {
-      fileName: `media/snapshots/${frame.data?.peripheral?.id || 'unknown'}/frames-hq/${timestamp}.jpeg`,
-      buffer: imageBuffer,
-    }
-  };
-
-  const sendCachedVideoTask = async (): Promise<void> => {
-    const snapshotData: ImageBatchItem[] = [];
-
-    logger.debug('Starting to process cached video frames');
-
-    await cacheService.forEachEntry('video', async (_, frame: InferenceEvent) => {
-      const batchItem = frameToBatchItem(frame);
-
-      if (!batchItem) {
-        logger.warn(`Skipping frame with no image data`, { frameId: frame.metadata?.id });
-        return;
-      }
-
-      snapshotData.push(batchItem);
-      converterQueue.add(batchItem);
-
-      if (snapshotData.length >= 3000) {
-        logger.info(`Processing batch of ${snapshotData.length} frames`);
-        const batchData = snapshotData.splice(0, 3000); // Take the first 3000 frames
-        snapshotData.length = 0; // Clear the array after processing
-        await gcsExporter.batchUploadImages(batchData);
-      }
-    });
-
-    if (snapshotData.length > 0) {
-      logger.info(`Processing remaining ${snapshotData.length} frames`);
-      await gcsExporter.batchUploadImages(snapshotData);
+  // Remember the run that is in progress, so shutdown() can wait for it.
+  const trackedTask = async (): Promise<void> => {
+    currentRun = exportTask();
+    try {
+      await currentRun;
+    } finally {
+      currentRun = null;
     }
   };
 
-  const scheduler = new Scheduler(schedulerInterval, sendCachedVideoTask); // Run every 5 seconds
-
+  scheduler = new Scheduler(schedulerInterval, trackedTask);
   scheduler.start();
 };
 
+const shutdown = async (signal: string): Promise<void> => {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
+
+  logger.info(`${signal} signal received, shutting down.`);
+
+  scheduler?.stop();
+
+  if (converterQueue) {
+    const queue = converterQueue;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<void>(resolve => {
+      timer = setTimeout(resolve, 10000);
+      timer.unref();
+    });
+
+    await Promise.race([
+      (async () => {
+        if (currentRun) {
+          await currentRun.catch(() => undefined);
+        }
+        await queue.drain();
+      })(),
+      timeout,
+    ]);
+
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+
+  process.exit(0);
+};
+
 process.on('SIGTERM', () => {
-  logger.info('SIGTERM signal received.');
+  void shutdown('SIGTERM');
+});
+
+process.on('SIGINT', () => {
+  void shutdown('SIGINT');
 });
 
 main();
