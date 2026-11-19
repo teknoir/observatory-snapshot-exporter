@@ -6,7 +6,7 @@
   "scripts": {
     "start": "NODE_ENV=production exec node dist/index.js",
     "dev": "NODE_ENV=development LOG_LEVEL=debug nodemon --watch src --ext ts --exec ts-node src/index.ts",
-    "test": "DISABLE_V8_COMPILE_CACHE=1 node --require ts-node/register --test --test-force-exit test/*.test.ts",
+    "test": "bash scripts/test.sh",
     "build": "tsc"
   },
   "repository": {

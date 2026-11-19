@@ -137,3 +137,6 @@ dist
 
 # Temporary files
 tmp
+
+# Full test logs (scripts/test.sh under a coding agent)
+.test-logs/
